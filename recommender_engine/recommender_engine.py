@@ -11,16 +11,16 @@ from openai import OpenAI
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, Prefetch
-from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Engine
 
+from database import QD_RECIPES_COLLECTION, engine as default_sql_engine, qd_client
+from recipes_repository.recipes_repository import RecipesRepository
 from recommender_engine.llm_output_models import RankAndJustifications
+from recommender_engine.llm_utils import build_semantic_representation
 from recommender_engine.prompts import (
     RECOMMENDATION_SYSTEM_PROMPT_TEMPLATE,
     RETRIEVAL_QUERY_SYSTEM_PROMPT,
 )
-from database import QD_RECIPES_COLLECTION, engine as default_sql_engine, qd_client
-from recommender_engine.llm_utils import QUERY, build_semantic_representation
 
 
 EMBEDDING_MODEL = "text-embedding-3-small"
@@ -63,6 +63,7 @@ class RecommenderEngine:
             print("ENV NOT LOADED")
 
         self.sql_engine = sql_engine
+        self.recipes_repository = RecipesRepository(self.sql_engine)
         self.qdrant_client = qdrant_client
         self.openai_client = openai_client or OpenAI()
         self.collection_name = collection_name
@@ -161,7 +162,7 @@ class RecommenderEngine:
         if not hits:
             return pd.DataFrame()
 
-        recipes_df = self._fetch_recipes_by_ids(hits.keys())
+        recipes_df = self.recipes_repository.get_relevant_recipes_by_ids(hits.keys())#self._fetch_recipes_by_ids(hits.keys())
         recipes_df["score"] = recipes_df["id"].map(hits)
         return recipes_df.sort_values(by="score", ascending=False).head(n_returned)
 
@@ -206,7 +207,7 @@ class RecommenderEngine:
     def _build_output_dataframe(self, response_data: dict[str, Any]) -> pd.DataFrame:
         ranked_recipes = response_data["ranked_recipes"]
         ids = [recipe["recipe_id"] for recipe in ranked_recipes]
-        recipes_df = self._fetch_recipes_by_ids(ids)
+        recipes_df = self.recipes_repository.get_relevant_recipes_by_ids(ids)#self._fetch_recipes_by_ids(ids)
         scores_df = pd.DataFrame(ranked_recipes)
 
         return (
@@ -221,15 +222,8 @@ class RecommenderEngine:
             .reset_index(drop=True)
         )
 
-    def _fetch_recipes_by_ids(self, recipe_ids: Sequence[int]) -> pd.DataFrame:
-        ids = list(recipe_ids)
-        if not ids:
-            return pd.DataFrame()
-
-        query = text(f"{QUERY} WHERE id IN :ids").bindparams(
-            bindparam("ids", expanding=True)
-        )
-        return pd.read_sql(query, self.sql_engine, params={"ids": ids})
+    # def _fetch_recipes_by_ids(self, recipe_ids: Sequence[int]) -> pd.DataFrame:
+    #     return self.recipes_repository.get_relevant_recipes_by_ids(recipe_ids)
 
     def _append_interaction_to_history(
         self,

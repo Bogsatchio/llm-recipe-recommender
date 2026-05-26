@@ -9,7 +9,7 @@ SELECT
         category,
         cuisine,
         ingredients,
-        --instructions,
+        ingredients_normalized,
         cooking_methods,
         number_of_steps,
         nutrition,

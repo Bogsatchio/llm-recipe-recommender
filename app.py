@@ -6,7 +6,7 @@ import pandas as pd
 from recommender_engine import RecommendationResult, RecommenderEngine
 
 
-DISPLAY_COLUMNS = ["name", "rating_value", "ingredients", "preparation_time"]
+DISPLAY_COLUMNS = ["name", "rating_value", "ingredients_normalized", "preparation_time"]
 
 
 def _format_table(recommendations: pd.DataFrame) -> pd.DataFrame:
@@ -74,15 +74,16 @@ def _respond(
 
     reply = (
         f"Found {len(result.recommendations)} recommendations.\n\n"
-        f"Retrieval query: `{result.retrieval_query}`"
+        f"{justifications}"
     )
+    retrieval_query = f"**Retrieval query**\n\n`{result.retrieval_query}`"
     ui_history = [
         *ui_history,
         {"role": "user", "content": message},
         {"role": "assistant", "content": reply},
     ]
 
-    return "", ui_history, ui_history, table, justifications, engine_history
+    return "", ui_history, ui_history, table, retrieval_query, engine_history
 
 
 def build_app() -> gr.Blocks:
@@ -115,7 +116,7 @@ def build_app() -> gr.Blocks:
                     interactive=False,
                     wrap=True,
                 )
-                justifications = gr.Markdown(label="Top 3 Justifications")
+                retrieval_query = gr.Markdown(label="Retrieval Query")
 
         submit.click(
             fn=lambda text, chat, history: _respond(text, chat, history, engine),
@@ -125,7 +126,7 @@ def build_app() -> gr.Blocks:
                 chatbot,
                 ui_history,
                 recommendations,
-                justifications,
+                retrieval_query,
                 engine_history,
             ],
         )
@@ -138,7 +139,7 @@ def build_app() -> gr.Blocks:
                 chatbot,
                 ui_history,
                 recommendations,
-                justifications,
+                retrieval_query,
                 engine_history,
             ],
         )
