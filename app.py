@@ -15,6 +15,7 @@ DIETARY_FILTER_CHOICES = [
     "is_kosher",
     "keto_friendliness",
 ]
+OVERALL_TIME_SLIDER_MAX = 240
 
 
 def _format_table(recommendations: pd.DataFrame) -> pd.DataFrame:
@@ -40,9 +41,23 @@ def _format_justifications(result: RecommendationResult) -> str:
     )
 
 
+def _build_overall_time_range(
+    enabled: bool,
+    min_time: float,
+    max_time: float,
+) -> tuple[float, float] | None:
+    if not enabled:
+        return None
+
+    return min_time, max_time
+
+
 def _respond(
     message: str,
     dietary_filters: list[str],
+    overall_time_enabled: bool,
+    overall_time_min: float,
+    overall_time_max: float,
     ui_history: list[dict[str, str]],
     engine_history: list[dict[str, str]],
     engine: RecommenderEngine,
@@ -69,6 +84,11 @@ def _respond(
             message,
             engine_history,
             dietary_filters=dietary_filters,
+            overall_time_range=_build_overall_time_range(
+                overall_time_enabled,
+                overall_time_min,
+                overall_time_max,
+            ),
         )
     except Exception as exc:
         ui_history = [
@@ -105,6 +125,33 @@ def _respond(
 def build_app() -> gr.Blocks:
     engine = RecommenderEngine()
 
+    def respond_with_engine(
+        text: str,
+        filters: list[str],
+        time_enabled: bool,
+        min_time: float,
+        max_time: float,
+        chat: list[dict[str, str]],
+        history: list[dict[str, str]],
+    ) -> tuple[
+        str,
+        list[dict[str, str]],
+        list[dict[str, str]],
+        pd.DataFrame,
+        str,
+        list[dict[str, str]],
+    ]:
+        return _respond(
+            text,
+            filters,
+            time_enabled,
+            min_time,
+            max_time,
+            chat,
+            history,
+            engine,
+        )
+
     with gr.Blocks(title="Recipe Recommender") as app:
         gr.Markdown("# Recipe Recommender")
 
@@ -128,6 +175,25 @@ def build_app() -> gr.Blocks:
                     label="Dietary filters",
                     value=[],
                 )
+                overall_time_enabled = gr.Checkbox(
+                    label="Filter by overall time",
+                    value=False,
+                )
+                with gr.Row():
+                    overall_time_min = gr.Slider(
+                        minimum=0,
+                        maximum=OVERALL_TIME_SLIDER_MAX,
+                        value=0,
+                        step=5,
+                        label="Min time (minutes)",
+                    )
+                    overall_time_max = gr.Slider(
+                        minimum=0,
+                        maximum=OVERALL_TIME_SLIDER_MAX,
+                        value=240,
+                        step=5,
+                        label="Max time (minutes)",
+                    )
                 submit = gr.Button("Send", variant="primary")
 
             with gr.Column(scale=1):
@@ -140,14 +206,16 @@ def build_app() -> gr.Blocks:
                 retrieval_query = gr.Markdown(label="Retrieval Query")
 
         submit.click(
-            fn=lambda text, filters, chat, history: _respond(
-                text,
-                filters,
-                chat,
-                history,
-                engine,
-            ),
-            inputs=[message, dietary_filters, ui_history, engine_history],
+            fn=respond_with_engine,
+            inputs=[
+                message,
+                dietary_filters,
+                overall_time_enabled,
+                overall_time_min,
+                overall_time_max,
+                ui_history,
+                engine_history,
+            ],
             outputs=[
                 message,
                 chatbot,
@@ -159,14 +227,16 @@ def build_app() -> gr.Blocks:
         )
 
         message.submit(
-            fn=lambda text, filters, chat, history: _respond(
-                text,
-                filters,
-                chat,
-                history,
-                engine,
-            ),
-            inputs=[message, dietary_filters, ui_history, engine_history],
+            fn=respond_with_engine,
+            inputs=[
+                message,
+                dietary_filters,
+                overall_time_enabled,
+                overall_time_min,
+                overall_time_max,
+                ui_history,
+                engine_history,
+            ],
             outputs=[
                 message,
                 chatbot,

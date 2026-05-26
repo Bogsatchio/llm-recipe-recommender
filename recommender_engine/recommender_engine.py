@@ -10,7 +10,7 @@ from litellm import completion
 from openai import OpenAI
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import FieldCondition, Filter, MatchValue, Prefetch
+from qdrant_client.models import FieldCondition, Filter, MatchValue, Prefetch, Range
 from sqlalchemy.engine import Engine
 
 from database import QD_RECIPES_COLLECTION, engine as default_sql_engine, qd_client
@@ -89,12 +89,14 @@ class RecommenderEngine:
         chat_history: MutableSequence[ChatMessage] | None = None,
         *,
         dietary_filters: Sequence[str] | None = None,
+        overall_time_range: tuple[float, float] | None = None,
         update_history: bool = True,
     ) -> tuple[pd.DataFrame, str]:
         result = self.recommend(
             question=question,
             chat_history=chat_history,
             dietary_filters=dietary_filters,
+            overall_time_range=overall_time_range,
             update_history=update_history,
         )
         return result.recommendations, result.retrieval_query
@@ -105,6 +107,7 @@ class RecommenderEngine:
         chat_history: MutableSequence[ChatMessage] | None = None,
         *,
         dietary_filters: Sequence[str] | None = None,
+        overall_time_range: tuple[float, float] | None = None,
         update_history: bool = True,
     ) -> RecommendationResult:
         history = chat_history if chat_history is not None else []
@@ -112,6 +115,7 @@ class RecommenderEngine:
         context = self.fetch_context(
             retrieval_query,
             dietary_filters=dietary_filters,
+            overall_time_range=overall_time_range,
         )
         if not context.strip():
             result = self._empty_recommendation_result(retrieval_query)
@@ -163,13 +167,14 @@ class RecommenderEngine:
         query: str,
         n_returned: int = 10,
         dietary_filters: Sequence[str] | None = None,
+        overall_time_range: tuple[float, float] | None = None,
     ) -> str:
         recipes_df = self.vector_search(
             query,
             n_returned=n_returned,
             dietary_filters=dietary_filters,
+            overall_time_range=overall_time_range,
         )
-        print(dietary_filters)
         if recipes_df.empty:
             return ""
 
@@ -181,10 +186,13 @@ class RecommenderEngine:
         query: str,
         n_returned: int = 10,
         dietary_filters: Sequence[str] | None = None,
+        overall_time_range: tuple[float, float] | None = None,
     ) -> pd.DataFrame:
         vector = self._embed_query(query)
-        query_filter = self._build_dietary_filter(dietary_filters)
-        print("QUERY FILTER: ")
+        query_filter = self._build_qdrant_filter(
+            dietary_filters=dietary_filters,
+            overall_time_range=overall_time_range,
+        )
         print(query_filter)
         results = self.qdrant_client.query_points(
             collection_name=self.collection_name,
@@ -213,9 +221,10 @@ class RecommenderEngine:
         recipes_df["score"] = recipes_df["id"].map(hits)
         return recipes_df.sort_values(by="score", ascending=False).head(n_returned)
 
-    def _build_dietary_filter(
+    def _build_qdrant_filter(
         self,
         dietary_filters: Sequence[str] | None,
+        overall_time_range: tuple[float, float] | None,
     ) -> Filter | None:
         selected_filters = [field for field in dietary_filters or [] if field]
         invalid_filters = set(selected_filters) - DIETARY_FILTER_FIELDS
@@ -223,18 +232,40 @@ class RecommenderEngine:
             invalid = ", ".join(sorted(invalid_filters))
             raise ValueError(f"Unsupported dietary filter field(s): {invalid}")
 
-        if not selected_filters:
+        must_conditions = [
+            FieldCondition(
+                key=field,
+                match=MatchValue(value=1),
+            )
+            for field in selected_filters
+        ]
+
+        if overall_time_range is not None:
+            min_time, max_time = self._normalize_overall_time_range(overall_time_range)
+            must_conditions.append(
+                FieldCondition(
+                    key="overall_time",
+                    range=Range(gte=min_time, lte=max_time),
+                )
+            )
+
+        if not must_conditions:
             return None
 
-        return Filter(
-            must=[
-                FieldCondition(
-                    key=field,
-                    match=MatchValue(value=1),
-                )
-                for field in selected_filters
-            ]
-        )
+        return Filter(must=must_conditions)
+
+    def _normalize_overall_time_range(
+        self,
+        overall_time_range: tuple[float, float],
+    ) -> tuple[float, float]:
+        min_time, max_time = overall_time_range
+        min_time = max(0.0, float(min_time))
+        max_time = max(0.0, float(max_time))
+
+        if min_time > max_time:
+            min_time, max_time = max_time, min_time
+
+        return min_time, max_time
 
     def clean_reply(self, recommendations: pd.DataFrame) -> str:
         reply = (
