@@ -6,19 +6,30 @@ import pandas as pd
 from recommender_engine import RecommendationResult, RecommenderEngine
 
 
-DISPLAY_COLUMNS = ["name", "rating_value", "ingredients_normalized", "preparation_time"]
+DISPLAY_COLUMNS = ["name", "rating_value", "ingredients_normalized", "overall_time"]
+DIETARY_FILTER_CHOICES = [
+    "is_vegan",
+    "is_vegetarian",
+    "is_gluten_free",
+    "is_halal",
+    "is_kosher",
+    "keto_friendliness",
+]
 
 
 def _format_table(recommendations: pd.DataFrame) -> pd.DataFrame:
     if recommendations.empty:
         return pd.DataFrame(columns=DISPLAY_COLUMNS)
 
-    table = recommendations.head(5).copy()
+    table = recommendations.head(7).copy()
     existing_columns = [column for column in DISPLAY_COLUMNS if column in table.columns]
     return table[existing_columns]
 
 
 def _format_justifications(result: RecommendationResult) -> str:
+    if result.recommendations.empty:
+        return result.justifications["first_place"]
+
     justifications = result.justifications
     return "\n\n".join(
         [
@@ -31,6 +42,7 @@ def _format_justifications(result: RecommendationResult) -> str:
 
 def _respond(
     message: str,
+    dietary_filters: list[str],
     ui_history: list[dict[str, str]],
     engine_history: list[dict[str, str]],
     engine: RecommenderEngine,
@@ -53,7 +65,11 @@ def _respond(
         )
 
     try:
-        result = engine.recommend(message, engine_history)
+        result = engine.recommend(
+            message,
+            engine_history,
+            dietary_filters=dietary_filters,
+        )
     except Exception as exc:
         ui_history = [
             *ui_history,
@@ -107,6 +123,11 @@ def build_app() -> gr.Blocks:
                     placeholder="Something spicy and with noodles",
                     lines=2,
                 )
+                dietary_filters = gr.CheckboxGroup(
+                    choices=DIETARY_FILTER_CHOICES,
+                    label="Dietary filters",
+                    value=[],
+                )
                 submit = gr.Button("Send", variant="primary")
 
             with gr.Column(scale=1):
@@ -119,8 +140,14 @@ def build_app() -> gr.Blocks:
                 retrieval_query = gr.Markdown(label="Retrieval Query")
 
         submit.click(
-            fn=lambda text, chat, history: _respond(text, chat, history, engine),
-            inputs=[message, ui_history, engine_history],
+            fn=lambda text, filters, chat, history: _respond(
+                text,
+                filters,
+                chat,
+                history,
+                engine,
+            ),
+            inputs=[message, dietary_filters, ui_history, engine_history],
             outputs=[
                 message,
                 chatbot,
@@ -132,8 +159,14 @@ def build_app() -> gr.Blocks:
         )
 
         message.submit(
-            fn=lambda text, chat, history: _respond(text, chat, history, engine),
-            inputs=[message, ui_history, engine_history],
+            fn=lambda text, filters, chat, history: _respond(
+                text,
+                filters,
+                chat,
+                history,
+                engine,
+            ),
+            inputs=[message, dietary_filters, ui_history, engine_history],
             outputs=[
                 message,
                 chatbot,

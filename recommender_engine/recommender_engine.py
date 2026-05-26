@@ -10,7 +10,7 @@ from litellm import completion
 from openai import OpenAI
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Filter, Prefetch
+from qdrant_client.models import FieldCondition, Filter, MatchValue, Prefetch
 from sqlalchemy.engine import Engine
 
 from database import QD_RECIPES_COLLECTION, engine as default_sql_engine, qd_client
@@ -28,6 +28,16 @@ REASONING_MODEL = "gpt-4.1-mini"
 DEFAULT_RETRIEVAL_LIMIT = 20
 DEFAULT_PREFETCH_LIMIT = 200
 DEFAULT_SCORE_THRESHOLD = 0.3
+DIETARY_FILTER_FIELDS = frozenset(
+    {
+        "is_vegan",
+        "is_vegetarian",
+        "is_gluten_free",
+        "is_halal",
+        "is_kosher",
+        "keto_friendliness",
+    }
+)
 
 
 ChatMessage = dict[str, str]
@@ -78,11 +88,13 @@ class RecommenderEngine:
         question: str,
         chat_history: MutableSequence[ChatMessage] | None = None,
         *,
+        dietary_filters: Sequence[str] | None = None,
         update_history: bool = True,
     ) -> tuple[pd.DataFrame, str]:
         result = self.recommend(
             question=question,
             chat_history=chat_history,
+            dietary_filters=dietary_filters,
             update_history=update_history,
         )
         return result.recommendations, result.retrieval_query
@@ -92,11 +104,25 @@ class RecommenderEngine:
         question: str,
         chat_history: MutableSequence[ChatMessage] | None = None,
         *,
+        dietary_filters: Sequence[str] | None = None,
         update_history: bool = True,
     ) -> RecommendationResult:
         history = chat_history if chat_history is not None else []
         retrieval_query = self.build_retrieval_query(question, history)
-        context = self.fetch_context(retrieval_query)
+        context = self.fetch_context(
+            retrieval_query,
+            dietary_filters=dietary_filters,
+        )
+        if not context.strip():
+            result = self._empty_recommendation_result(retrieval_query)
+            if update_history and chat_history is not None:
+                self._append_interaction_to_history(
+                    question,
+                    result.recommendations,
+                    chat_history,
+                )
+            return result
+
         system_prompt = self._build_system_prompt(context)
         response_data = self._rank_recipes(question, history, system_prompt)
 
@@ -132,13 +158,34 @@ class RecommenderEngine:
 
         return response.choices[0].message.content.strip()
 
-    def fetch_context(self, query: str, n_returned: int = 10) -> str:
-        recipes_df = self.vector_search(query, n_returned=n_returned)
+    def fetch_context(
+        self,
+        query: str,
+        n_returned: int = 10,
+        dietary_filters: Sequence[str] | None = None,
+    ) -> str:
+        recipes_df = self.vector_search(
+            query,
+            n_returned=n_returned,
+            dietary_filters=dietary_filters,
+        )
+        print(dietary_filters)
+        if recipes_df.empty:
+            return ""
+
         context_items = recipes_df.apply(build_semantic_representation, axis=1).tolist()
         return "".join(f"\n{recipe}\n" for recipe in context_items)
 
-    def vector_search(self, query: str, n_returned: int = 10) -> pd.DataFrame:
+    def vector_search(
+        self,
+        query: str,
+        n_returned: int = 10,
+        dietary_filters: Sequence[str] | None = None,
+    ) -> pd.DataFrame:
         vector = self._embed_query(query)
+        query_filter = self._build_dietary_filter(dietary_filters)
+        print("QUERY FILTER: ")
+        print(query_filter)
         results = self.qdrant_client.query_points(
             collection_name=self.collection_name,
             prefetch=[
@@ -148,7 +195,7 @@ class RecommenderEngine:
                 )
             ],
             query=vector,
-            query_filter=Filter(should=[]),
+            query_filter=query_filter,
             limit=self.retrieval_limit,
             score_threshold=self.score_threshold,
             with_payload=True,
@@ -166,11 +213,37 @@ class RecommenderEngine:
         recipes_df["score"] = recipes_df["id"].map(hits)
         return recipes_df.sort_values(by="score", ascending=False).head(n_returned)
 
+    def _build_dietary_filter(
+        self,
+        dietary_filters: Sequence[str] | None,
+    ) -> Filter | None:
+        selected_filters = [field for field in dietary_filters or [] if field]
+        invalid_filters = set(selected_filters) - DIETARY_FILTER_FIELDS
+        if invalid_filters:
+            invalid = ", ".join(sorted(invalid_filters))
+            raise ValueError(f"Unsupported dietary filter field(s): {invalid}")
+
+        if not selected_filters:
+            return None
+
+        return Filter(
+            must=[
+                FieldCondition(
+                    key=field,
+                    match=MatchValue(value=1),
+                )
+                for field in selected_filters
+            ]
+        )
+
     def clean_reply(self, recommendations: pd.DataFrame) -> str:
         reply = (
             "Recipe recommendations were provided based on previous preferences. "
             "Here are the top 3 picks: \n"
         )
+        if recommendations.empty:
+            return reply + "No matching recipes were found."
+
         top_3 = "\n\n".join(
             recommendations.head(3).apply(
                 build_semantic_representation,
@@ -208,6 +281,9 @@ class RecommenderEngine:
         ranked_recipes = response_data["ranked_recipes"]
         ids = [recipe["recipe_id"] for recipe in ranked_recipes]
         recipes_df = self.recipes_repository.get_relevant_recipes_by_ids(ids)#self._fetch_recipes_by_ids(ids)
+        if recipes_df.empty:
+            return pd.DataFrame()
+
         scores_df = pd.DataFrame(ranked_recipes)
 
         return (
@@ -238,6 +314,18 @@ class RecommenderEngine:
 
     def _build_system_prompt(self, context: str) -> str:
         return RECOMMENDATION_SYSTEM_PROMPT_TEMPLATE.format(context=context)
+
+    def _empty_recommendation_result(self, retrieval_query: str) -> RecommendationResult:
+        message = "No matching recipes were found for this request and filter set."
+        return RecommendationResult(
+            recommendations=pd.DataFrame(),
+            retrieval_query=retrieval_query,
+            justifications={
+                "first_place": message,
+                "second_place": message,
+                "third_place": message,
+            },
+        )
 
     def _extract_justifications(self, response_data: dict[str, Any]) -> dict[str, str]:
         return {
