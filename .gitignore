@@ -2,6 +2,9 @@
 .idea
 .env
 *.env
+__pycache__/
+*.pyc
+gradio.*.log
 
 
 data

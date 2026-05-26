@@ -1,0 +1,23 @@
+SELECT
+        id,
+        name,
+        rating_value,
+        rating_count,
+        preparation_time,
+        cooking_time,
+        preparation_time + cooking_time AS overall_time,
+        category,
+        cuisine,
+        ingredients,
+        --instructions,
+        cooking_methods,
+        number_of_steps,
+        nutrition,
+        is_vegan,
+        is_vegetarian,
+        is_gluten_free,
+        is_halal,
+        is_kosher,
+        keto_friendliness
+    FROM
+        recipes_main
