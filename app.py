@@ -52,6 +52,32 @@ def _build_overall_time_range(
     return min_time, max_time
 
 
+def _new_chat() -> tuple[
+    str,
+    list[dict[str, str]],
+    list[dict[str, str]],
+    pd.DataFrame,
+    str,
+    list[dict[str, str]],
+    list[str],
+    bool,
+    float,
+    float,
+]:
+    return (
+        "",
+        [],
+        [],
+        pd.DataFrame(columns=DISPLAY_COLUMNS),
+        "",
+        [],
+        [],
+        False,
+        0,
+        OVERALL_TIME_SLIDER_MAX,
+    )
+
+
 def _respond(
     message: str,
     dietary_filters: list[str],
@@ -195,6 +221,7 @@ def build_app() -> gr.Blocks:
                         label="Max time (minutes)",
                     )
                 submit = gr.Button("Send", variant="primary")
+                new_chat = gr.Button("New chat")
 
             with gr.Column(scale=1):
                 recommendations = gr.Dataframe(
@@ -223,6 +250,23 @@ def build_app() -> gr.Blocks:
                 recommendations,
                 retrieval_query,
                 engine_history,
+            ],
+        )
+
+        new_chat.click(
+            fn=_new_chat,
+            inputs=[],
+            outputs=[
+                message,
+                chatbot,
+                ui_history,
+                recommendations,
+                retrieval_query,
+                engine_history,
+                dietary_filters,
+                overall_time_enabled,
+                overall_time_min,
+                overall_time_max,
             ],
         )
 

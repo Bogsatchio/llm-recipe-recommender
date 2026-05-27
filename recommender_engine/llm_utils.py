@@ -1,33 +1,53 @@
 import json
 import ast
-import pandas as pd
-from sympy.codegen.ast import none
-from sympy.parsing.sympy_parser import null
+from typing import Sequence
 
-QUERY = """
-    SELECT
-        id,
-        name,
-        rating_value,
-        rating_count,
-        preparation_time,
-        cooking_time,
-        preparation_time + cooking_time AS overall_time,
-        category,
-        cuisine,
-        ingredients,
-        --instructions,
-        cooking_methods,
-        number_of_steps,
-        nutrition,
-        is_vegan,
-        is_vegetarian,
-        is_gluten_free,
-        is_halal,
-        is_kosher,
-        keto_friendliness
-    FROM recipes_main
-"""
+import pandas as pd
+
+
+DIETARY_FILTER_LABELS = {
+    "is_vegan": "vegan",
+    "is_vegetarian": "vegetarian",
+    "is_gluten_free": "gluten-free",
+    "is_halal": "halal",
+    "is_kosher": "kosher",
+    "keto_friendliness": "keto-friendly",
+}
+
+
+def enhance_query_with_filters(
+    query: str,
+    dietary_filters: Sequence[str] | None = None,
+    overall_time_range: tuple[float, float] | None = None,
+) -> str:
+    prerequisites = []
+
+    selected_dietary_filters = [
+        DIETARY_FILTER_LABELS.get(field, field.replace("_", " "))
+        for field in dietary_filters or []
+        if field
+    ]
+    if selected_dietary_filters:
+        prerequisites.append(
+            "recipes must be " + ", ".join(selected_dietary_filters)
+        )
+
+    if overall_time_range is not None:
+        min_time, max_time = overall_time_range
+        min_time = max(0.0, float(min_time))
+        max_time = max(0.0, float(max_time))
+        if min_time > max_time:
+            min_time, max_time = max_time, min_time
+
+        prerequisites.append(
+            f"Preparation time must be between "
+            f"{min_time:g} and {max_time:g} minutes"
+        )
+
+    if not prerequisites:
+        return query
+
+    return f"{query}\n\nPREREQUISITES: {'; '.join(prerequisites)}"
 
 def safe_parse(value):
     """Parse JSON strings or return value as-is if already a list/dict."""
@@ -53,8 +73,6 @@ def complexity_label(steps, total_minutes=0):
     if steps <= 10:  return "Moderate"
     return "High"
 
-
-import ast
 
 def nutrition_summary(nutrition_raw):
     # 1. Cleanly attempt to parse the data
@@ -163,7 +181,7 @@ def build_semantic_representation(row, add_id=True):
     if total > 0 or steps > 0:
         parts.append(
             f"Effort: {complexity_label(steps, total)} / {effort_label(total, prep)}"
-            f"\nTime: {total} min \nSteps: {steps}"
+            f"\nPreparation time: {total} min \nSteps: {steps}"
         )
 
     # nutrition
@@ -183,3 +201,30 @@ def build_semantic_representation(row, add_id=True):
         pass
 
     return "\n".join(parts)
+
+
+
+# QUERY = """
+#     SELECT
+#         id,
+#         name,
+#         rating_value,
+#         rating_count,
+#         preparation_time,
+#         cooking_time,
+#         preparation_time + cooking_time AS overall_time,
+#         category,
+#         cuisine,
+#         ingredients,
+#         --instructions,
+#         cooking_methods,
+#         number_of_steps,
+#         nutrition,
+#         is_vegan,
+#         is_vegetarian,
+#         is_gluten_free,
+#         is_halal,
+#         is_kosher,
+#         keto_friendliness
+#     FROM recipes_main
+# """

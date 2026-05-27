@@ -16,7 +16,7 @@ from sqlalchemy.engine import Engine
 from database import QD_RECIPES_COLLECTION, engine as default_sql_engine, qd_client
 from recipes_repository.recipes_repository import RecipesRepository
 from recommender_engine.llm_output_models import RankAndJustifications
-from recommender_engine.llm_utils import build_semantic_representation
+from recommender_engine.llm_utils import build_semantic_representation, enhance_query_with_filters
 from recommender_engine.prompts import (
     RECOMMENDATION_SYSTEM_PROMPT_TEMPLATE,
     RETRIEVAL_QUERY_SYSTEM_PROMPT,
@@ -111,6 +111,11 @@ class RecommenderEngine:
         update_history: bool = True,
     ) -> RecommendationResult:
         history = chat_history if chat_history is not None else []
+        question = enhance_query_with_filters(
+            question,
+            dietary_filters,
+            overall_time_range,
+        )
         retrieval_query = self.build_retrieval_query(question, history)
         context = self.fetch_context(
             retrieval_query,
