@@ -79,3 +79,6 @@ class RecipesRepository:
             bindparam("ids", expanding=True)
         )
         return pd.read_sql(query, self.engine, params={"ids": ids})
+
+    def get_recipes(self):
+        return pd.read_sql(self._relevant_cols_recipes_sql, self.engine)

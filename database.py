@@ -1,21 +1,54 @@
 import logging
 import time
 
+from qdrant_client import QdrantClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
-from qdrant_client import QdrantClient
 
 DATABASE_URL = "mysql+pymysql://dev:dev@localhost:3306/recipe_app"
 DATABASE_CONNECT_RETRIES = 10
 DATABASE_CONNECT_RETRY_DELAY_SECONDS = 3
+QDRANT_HOST = "localhost"
+QDRANT_PORT = 6333
 
 logger = logging.getLogger(__name__)
 
 # setup qdrant client connection
 QD_RECIPES_COLLECTION = "recipes"
-qd_client = QdrantClient(host="localhost", port=6333)
+
+
+def create_vector_database_client_with_retry() -> QdrantClient:
+    last_error: Exception | None = None
+
+    for attempt in range(1, DATABASE_CONNECT_RETRIES + 1):
+        client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+
+        try:
+            client.get_collections()
+            logger.info("Vector database connection established.")
+            return client
+        except Exception as exc:
+            last_error = exc
+            client.close()
+
+            if attempt == DATABASE_CONNECT_RETRIES:
+                break
+
+            logger.warning(
+                "Vector database connection failed on attempt %s/%s. "
+                "Retrying in %s seconds.",
+                attempt,
+                DATABASE_CONNECT_RETRIES,
+                DATABASE_CONNECT_RETRY_DELAY_SECONDS,
+            )
+            time.sleep(DATABASE_CONNECT_RETRY_DELAY_SECONDS)
+
+    raise RuntimeError(
+        "Could not connect to the vector database after "
+        f"{DATABASE_CONNECT_RETRIES} attempts."
+    ) from last_error
 
 
 def create_database_engine_with_retry() -> Engine:
@@ -53,4 +86,3 @@ def create_database_engine_with_retry() -> Engine:
         "Could not connect to the database after "
         f"{DATABASE_CONNECT_RETRIES} attempts."
     ) from last_error
-

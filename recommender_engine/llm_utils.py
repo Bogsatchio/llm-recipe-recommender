@@ -1,8 +1,12 @@
 import json
 import ast
-from typing import Sequence
-
+from dataclasses import dataclass
+from typing import Any, MutableSequence, Sequence
 import pandas as pd
+
+from recommender_engine.prompts import (
+    RECOMMENDATION_SYSTEM_PROMPT_TEMPLATE,
+)
 
 
 DIETARY_FILTER_LABELS = {
@@ -13,6 +17,52 @@ DIETARY_FILTER_LABELS = {
     "is_kosher": "kosher",
     "keto_friendliness": "keto-friendly",
 }
+
+
+ChatMessage = dict[str, str]
+
+
+@dataclass(frozen=True)
+class RecommendationResult:
+    recommendations: pd.DataFrame
+    retrieval_query: str
+    justifications: dict[str, str]
+
+
+def _extract_justifications(response_data: dict[str, Any]) -> dict[str, str]:
+    return {
+        "first_place": response_data["first_place_justification"],
+        "second_place": response_data["second_place_justification"],
+        "third_place": response_data["third_place_justification"],
+    }
+
+
+def _empty_recommendation_result(retrieval_query: str) -> RecommendationResult:
+    message = "No matching recipes were found for this request and filter set."
+    return RecommendationResult(
+        recommendations=pd.DataFrame(),
+        retrieval_query=retrieval_query,
+        justifications={
+            "first_place": message,
+            "second_place": message,
+            "third_place": message,
+        },
+    )
+
+
+def _append_interaction_to_history(
+    question: str,
+    recommendations: pd.DataFrame,
+    chat_history: MutableSequence[ChatMessage],
+) -> None:
+    chat_history.append({"role": "user", "content": question})
+    chat_history.append(
+        {"role": "assistant", "content": clean_reply(recommendations)}
+    )
+
+
+def build_system_prompt(context: str) -> str:
+    return RECOMMENDATION_SYSTEM_PROMPT_TEMPLATE.format(context=context)
 
 
 def enhance_query_with_filters(
@@ -48,6 +98,25 @@ def enhance_query_with_filters(
         return query
 
     return f"{query}\n\nPREREQUISITES: {'; '.join(prerequisites)}"
+
+
+def clean_reply(recommendations: pd.DataFrame) -> str:
+    reply = (
+        "Recipe recommendations were provided based on previous preferences. "
+        "Here are the top 3 picks: \n"
+    )
+    if recommendations.empty:
+        return reply + "No matching recipes were found."
+
+    top_3 = "\n\n".join(
+        recommendations.head(3).apply(
+            build_semantic_representation,
+            add_id=False,
+            axis=1,
+        ).tolist()
+    )
+    return reply + top_3
+
 
 def safe_parse(value):
     """Parse JSON strings or return value as-is if already a list/dict."""

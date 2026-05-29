@@ -1,8 +1,9 @@
 from __future__ import annotations
-
 import json
-from dataclasses import dataclass
+import ast
+import logging
 from typing import Any, MutableSequence, Sequence
+from tqdm import tqdm
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -10,17 +11,24 @@ from litellm import completion
 from openai import OpenAI
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import FieldCondition, Filter, MatchValue, Prefetch, Range
-from sqlalchemy.engine import Engine
+from qdrant_client.models import FieldCondition, Filter, MatchValue, Prefetch, Range, PointStruct, Distance, VectorParams
 
-from database import QD_RECIPES_COLLECTION, qd_client
+from database import QD_RECIPES_COLLECTION
 from recipes_repository.recipes_repository import RecipesRepository
 from recommender_engine.llm_output_models import RankAndJustifications
-from recommender_engine.llm_utils import build_semantic_representation, enhance_query_with_filters
-from recommender_engine.prompts import (
-    RECOMMENDATION_SYSTEM_PROMPT_TEMPLATE,
-    RETRIEVAL_QUERY_SYSTEM_PROMPT,
+from recommender_engine.llm_utils import (
+    ChatMessage,
+    RecommendationResult,
+    _append_interaction_to_history,
+    _empty_recommendation_result,
+    _extract_justifications,
+    build_system_prompt,
+    build_semantic_representation,
+    clean_reply,
+    enhance_query_with_filters,
 )
+from recommender_engine.prompts import RETRIEVAL_QUERY_SYSTEM_PROMPT
+
 
 
 EMBEDDING_MODEL = "text-embedding-3-small"
@@ -28,6 +36,8 @@ REASONING_MODEL = "gpt-4.1-mini"
 DEFAULT_RETRIEVAL_LIMIT = 20
 DEFAULT_PREFETCH_LIMIT = 200
 DEFAULT_SCORE_THRESHOLD = 0.3
+QDRANT_BATCH_SIZE = 1_000
+logger = logging.getLogger(__name__)
 DIETARY_FILTER_FIELDS = frozenset(
     {
         "is_vegan",
@@ -40,22 +50,12 @@ DIETARY_FILTER_FIELDS = frozenset(
 )
 
 
-ChatMessage = dict[str, str]
-
-
-@dataclass(frozen=True)
-class RecommendationResult:
-    recommendations: pd.DataFrame
-    retrieval_query: str
-    justifications: dict[str, str]
-
-
 class RecommenderEngine:
     def __init__(
         self,
         recipes_repository: RecipesRepository,
+        qdrant_client: QdrantClient,
         *,
-        qdrant_client: QdrantClient = qd_client,
         openai_client: OpenAI | None = None,
         collection_name: str = QD_RECIPES_COLLECTION,
         embedding_model: str = EMBEDDING_MODEL,
@@ -122,23 +122,23 @@ class RecommenderEngine:
             overall_time_range=overall_time_range,
         )
         if not context.strip():
-            result = self._empty_recommendation_result(retrieval_query)
+            result = _empty_recommendation_result(retrieval_query)
             if update_history and chat_history is not None:
-                self._append_interaction_to_history(
+                _append_interaction_to_history(
                     question,
                     result.recommendations,
                     chat_history,
                 )
             return result
 
-        system_prompt = self._build_system_prompt(context)
+        system_prompt = build_system_prompt(context)
         response_data = self._rank_recipes(question, history, system_prompt)
 
         output_df = self._build_output_dataframe(response_data)
-        justifications = self._extract_justifications(response_data)
+        justifications = _extract_justifications(response_data)
 
         if update_history and chat_history is not None:
-            self._append_interaction_to_history(question, output_df, chat_history)
+            _append_interaction_to_history(question, output_df, chat_history)
 
         return RecommendationResult(
             recommendations=output_df,
@@ -272,21 +272,7 @@ class RecommenderEngine:
         return min_time, max_time
 
     def clean_reply(self, recommendations: pd.DataFrame) -> str:
-        reply = (
-            "Recipe recommendations were provided based on previous preferences. "
-            "Here are the top 3 picks: \n"
-        )
-        if recommendations.empty:
-            return reply + "No matching recipes were found."
-
-        top_3 = "\n\n".join(
-            recommendations.head(3).apply(
-                build_semantic_representation,
-                add_id=False,
-                axis=1,
-            ).tolist()
-        )
-        return reply + top_3
+        return clean_reply(recommendations)
 
     def _embed_query(self, query: str) -> list[float]:
         query_vec = self.openai_client.embeddings.create(
@@ -333,38 +319,81 @@ class RecommenderEngine:
             .reset_index(drop=True)
         )
 
-    # def _fetch_recipes_by_ids(self, recipe_ids: Sequence[int]) -> pd.DataFrame:
-    #     return self.recipes_repository.get_relevant_recipes_by_ids(recipe_ids)
+    def ensure_source_vector_collection_loaded(self) -> int:
+        """Create and populate the source vector collection when it is missing.
 
-    def _append_interaction_to_history(
-        self,
-        question: str,
-        recommendations: pd.DataFrame,
-        chat_history: MutableSequence[ChatMessage],
-    ) -> None:
-        chat_history.append({"role": "user", "content": question})
-        chat_history.append(
-            {"role": "assistant", "content": self.clean_reply(recommendations)}
+        Returns the number of points loaded. If the collection already exists,
+        returns 0.
+        """
+        if self.qdrant_client.collection_exists(QD_RECIPES_COLLECTION):
+            logger.info("`%s` vector collection present.", QD_RECIPES_COLLECTION)
+            return 0
+
+        loaded_count = self._load_source_collection()
+        logger.info(
+            "Data loaded in `%s` vector collection.",
+            QD_RECIPES_COLLECTION,
         )
+        return loaded_count
 
-    def _build_system_prompt(self, context: str) -> str:
-        return RECOMMENDATION_SYSTEM_PROMPT_TEMPLATE.format(context=context)
+    def _load_source_collection(self) -> int:
+        def embed_batch(texts: list[str], batch_size: int = 500) -> list:
+            """Embed a list of texts in batches, returns list of vectors."""
+            all_embeddings = []
 
-    def _empty_recommendation_result(self, retrieval_query: str) -> RecommendationResult:
-        message = "No matching recipes were found for this request and filter set."
-        return RecommendationResult(
-            recommendations=pd.DataFrame(),
-            retrieval_query=retrieval_query,
-            justifications={
-                "first_place": message,
-                "second_place": message,
-                "third_place": message,
+            for i in tqdm(range(0, len(texts), batch_size), desc="Embedding recipes"):
+                batch = texts[i: i + batch_size]
+                response = self.openai_client.embeddings.create(input=batch, model=self.embedding_model)
+                all_embeddings.extend([item.embedding for item in response.data])
+
+            return all_embeddings
+
+        df = self.recipes_repository.get_recipes()
+        df['embedding_text'] = df.apply(build_semantic_representation, add_id=False, axis=1)
+        vectors = embed_batch(df['embedding_text'].tolist())
+        df["payload"] = df.apply(
+            lambda r: {
+                "id": r["id"],
+                #"ingredients": ast.literal_eval(r["ingredients"]),
+                "category": ast.literal_eval(r["category"]),
+                "cuisine": r["cuisine"],
+                "overall_time": r["overall_time"],
+                "is_vegan": r["is_vegan"],
+                "is_vegetarian": r["is_vegetarian"],
+                "is_gluten_free": r["is_gluten_free"],
+                "is_halal": r["is_halal"],
+                "is_kosher": r["is_kosher"],
+                "keto_friendliness": r["keto_friendliness"],
             },
+            axis=1
         )
 
-    def _extract_justifications(self, response_data: dict[str, Any]) -> dict[str, str]:
-        return {
-            "first_place": response_data["first_place_justification"],
-            "second_place": response_data["second_place_justification"],
-            "third_place": response_data["third_place_justification"],
-        }
+        points = [
+            PointStruct(
+                id=int(df.iloc[i]["id"]),
+                vector=vectors[i],
+                payload=df.iloc[i]["payload"]
+            )
+            for i in range(len(df))
+        ]
+
+        if self.qdrant_client.collection_exists(QD_RECIPES_COLLECTION):
+            self.qdrant_client.delete_collection(QD_RECIPES_COLLECTION)
+
+        self.qdrant_client.create_collection(
+            collection_name=QD_RECIPES_COLLECTION,
+            vectors_config=VectorParams(
+                size=1536,
+                distance=Distance.COSINE
+            )
+        )
+
+        for start in range(0, len(points), QDRANT_BATCH_SIZE):
+            batch = points[start:start + QDRANT_BATCH_SIZE]
+
+            self.qdrant_client.upsert(
+                collection_name=QD_RECIPES_COLLECTION,
+                points=batch
+            )
+
+        return len(points)

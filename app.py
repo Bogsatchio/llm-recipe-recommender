@@ -4,7 +4,7 @@ import logging
 import gradio as gr
 import pandas as pd
 
-from database import create_database_engine_with_retry
+from database import create_database_engine_with_retry, create_vector_database_client_with_retry
 from recipes_repository.recipes_repository import RecipesRepository
 from recommender_engine import RecommendationResult, RecommenderEngine
 
@@ -155,9 +155,11 @@ def _respond(
 
 def build_app() -> gr.Blocks:
     default_engine = create_database_engine_with_retry()
+    qd_client = create_vector_database_client_with_retry()
     recipes_repository = RecipesRepository(default_engine)
     recipes_repository.ensure_source_data_loaded()
-    engine = RecommenderEngine(recipes_repository)
+    engine = RecommenderEngine(recipes_repository, qd_client)
+    engine.ensure_source_vector_collection_loaded()
 
     def respond_with_engine(
         text: str,
