@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 import gradio as gr
 import pandas as pd
 
+from database import create_database_engine_with_retry
+from recipes_repository.recipes_repository import RecipesRepository
 from recommender_engine import RecommendationResult, RecommenderEngine
 
 
@@ -16,6 +19,8 @@ DIETARY_FILTER_CHOICES = [
     "keto_friendliness",
 ]
 OVERALL_TIME_SLIDER_MAX = 240
+
+logging.basicConfig(level=logging.INFO)
 
 
 def _format_table(recommendations: pd.DataFrame) -> pd.DataFrame:
@@ -149,7 +154,10 @@ def _respond(
 
 
 def build_app() -> gr.Blocks:
-    engine = RecommenderEngine()
+    default_engine = create_database_engine_with_retry()
+    recipes_repository = RecipesRepository(default_engine)
+    recipes_repository.ensure_source_data_loaded()
+    engine = RecommenderEngine(recipes_repository)
 
     def respond_with_engine(
         text: str,
@@ -186,6 +194,7 @@ def build_app() -> gr.Blocks:
 
         with gr.Row(equal_height=True):
             with gr.Column(scale=1):
+                new_chat = gr.Button("New chat")
                 chatbot = gr.Chatbot(
                     label="Chat",
                     type="messages",
@@ -221,7 +230,6 @@ def build_app() -> gr.Blocks:
                         label="Max time (minutes)",
                     )
                 submit = gr.Button("Send", variant="primary")
-                new_chat = gr.Button("New chat")
 
             with gr.Column(scale=1):
                 recommendations = gr.Dataframe(

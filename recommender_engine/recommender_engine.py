@@ -13,7 +13,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchValue, Prefetch, Range
 from sqlalchemy.engine import Engine
 
-from database import QD_RECIPES_COLLECTION, engine as default_sql_engine, qd_client
+from database import QD_RECIPES_COLLECTION, qd_client
 from recipes_repository.recipes_repository import RecipesRepository
 from recommender_engine.llm_output_models import RankAndJustifications
 from recommender_engine.llm_utils import build_semantic_representation, enhance_query_with_filters
@@ -53,8 +53,8 @@ class RecommendationResult:
 class RecommenderEngine:
     def __init__(
         self,
+        recipes_repository: RecipesRepository,
         *,
-        sql_engine: Engine = default_sql_engine,
         qdrant_client: QdrantClient = qd_client,
         openai_client: OpenAI | None = None,
         collection_name: str = QD_RECIPES_COLLECTION,
@@ -72,8 +72,7 @@ class RecommenderEngine:
         else:
             print("ENV NOT LOADED")
 
-        self.sql_engine = sql_engine
-        self.recipes_repository = RecipesRepository(self.sql_engine)
+        self.recipes_repository = recipes_repository
         self.qdrant_client = qdrant_client
         self.openai_client = openai_client or OpenAI()
         self.collection_name = collection_name
