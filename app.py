@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import gradio as gr
 import pandas as pd
 
@@ -21,6 +22,8 @@ DIETARY_FILTER_CHOICES = [
 OVERALL_TIME_SLIDER_MAX = 240
 
 logging.basicConfig(level=logging.INFO)
+GRADIO_SERVER_NAME = os.getenv("GRADIO_SERVER_NAME", "127.0.0.1")
+GRADIO_SERVER_PORT = int(os.getenv("GRADIO_SERVER_PORT", "7860"))
 
 
 def _format_table(recommendations: pd.DataFrame) -> pd.DataFrame:
@@ -305,4 +308,7 @@ def build_app() -> gr.Blocks:
 
 
 if __name__ == "__main__":
-    build_app().launch()
+    build_app().launch(
+        server_name=GRADIO_SERVER_NAME,
+        server_port=GRADIO_SERVER_PORT,
+    )

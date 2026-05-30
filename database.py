@@ -1,17 +1,22 @@
 import logging
+import os
 import time
 
 from qdrant_client import QdrantClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import sessionmaker
 
-DATABASE_URL = "mysql+pymysql://dev:dev@localhost:3306/recipe_app"
-DATABASE_CONNECT_RETRIES = 10
-DATABASE_CONNECT_RETRY_DELAY_SECONDS = 3
-QDRANT_HOST = "localhost"
-QDRANT_PORT = 6333
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "mysql+pymysql://dev:dev@localhost:3306/recipe_app",
+)
+DATABASE_CONNECT_RETRIES = int(os.getenv("DATABASE_CONNECT_RETRIES", "10"))
+DATABASE_CONNECT_RETRY_DELAY_SECONDS = int(
+    os.getenv("DATABASE_CONNECT_RETRY_DELAY_SECONDS", "3")
+)
+QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
+QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 
 logger = logging.getLogger(__name__)
 

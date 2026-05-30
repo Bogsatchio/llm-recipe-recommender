@@ -1,0 +1,11 @@
+.git
+.idea
+.ruff_cache
+.venv
+__pycache__
+*.pyc
+*.log
+.env
+*.env
+data
+notebooks

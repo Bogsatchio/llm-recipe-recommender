@@ -320,19 +320,36 @@ class RecommenderEngine:
         )
 
     def ensure_source_vector_collection_loaded(self) -> int:
-        """Create and populate the source vector collection when it is missing.
+        """Create and populate the source vector collection when missing or incomplete.
 
-        Returns the number of points loaded. If the collection already exists,
-        returns 0.
+        Returns the number of points loaded. If the collection already contains
+        one point per source recipe, returns 0.
         """
-        if self.qdrant_client.collection_exists(QD_RECIPES_COLLECTION):
-            logger.info("`%s` vector collection present.", QD_RECIPES_COLLECTION)
-            return 0
+        expected_count = len(self.recipes_repository.get_recipes())
+        if self.qdrant_client.collection_exists(self.collection_name):
+            existing_count = self.qdrant_client.count(
+                collection_name=self.collection_name,
+                exact=True,
+            ).count
+            if existing_count == expected_count:
+                logger.info(
+                    "`%s` vector collection present with %s points.",
+                    self.collection_name,
+                    existing_count,
+                )
+                return 0
+
+            logger.warning(
+                "`%s` vector collection has %s points, expected %s. Reloading.",
+                self.collection_name,
+                existing_count,
+                expected_count,
+            )
 
         loaded_count = self._load_source_collection()
         logger.info(
             "Data loaded in `%s` vector collection.",
-            QD_RECIPES_COLLECTION,
+            self.collection_name,
         )
         return loaded_count
 
@@ -377,11 +394,11 @@ class RecommenderEngine:
             for i in range(len(df))
         ]
 
-        if self.qdrant_client.collection_exists(QD_RECIPES_COLLECTION):
-            self.qdrant_client.delete_collection(QD_RECIPES_COLLECTION)
+        if self.qdrant_client.collection_exists(self.collection_name):
+            self.qdrant_client.delete_collection(self.collection_name)
 
         self.qdrant_client.create_collection(
-            collection_name=QD_RECIPES_COLLECTION,
+            collection_name=self.collection_name,
             vectors_config=VectorParams(
                 size=1536,
                 distance=Distance.COSINE
@@ -392,7 +409,7 @@ class RecommenderEngine:
             batch = points[start:start + QDRANT_BATCH_SIZE]
 
             self.qdrant_client.upsert(
-                collection_name=QD_RECIPES_COLLECTION,
+                collection_name=self.collection_name,
                 points=batch
             )
 
