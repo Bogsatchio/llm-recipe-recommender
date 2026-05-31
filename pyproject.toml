@@ -25,3 +25,12 @@ dependencies = [
     "gradio (>=5.0.0,<6.0.0)",
     "pyarrow",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

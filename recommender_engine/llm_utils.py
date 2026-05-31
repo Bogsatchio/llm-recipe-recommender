@@ -144,17 +144,17 @@ def complexity_label(steps, total_minutes=0):
 
 
 def nutrition_summary(nutrition_raw):
-    # 1. Cleanly attempt to parse the data
-    data = None
-    try:
-        data = ast.literal_eval(safe_parse(nutrition_raw))
-    except (SyntaxError, ValueError):
-        # Attempt the fix
+    data = safe_parse(nutrition_raw)
+    if data is None and isinstance(nutrition_raw, str):
         try:
-            data = ast.literal_eval(safe_parse(nutrition_raw + "}"))
-        except Exception:
-            data = None
-    except Exception:
+            data = ast.literal_eval(nutrition_raw)
+        except (SyntaxError, ValueError):
+            try:
+                data = ast.literal_eval(nutrition_raw + "}")
+            except Exception:
+                data = None
+
+    if not isinstance(data, dict):
         data = None
 
     # 2. Guard clause: Exit early if parsing failed
