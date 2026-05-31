@@ -34,3 +34,6 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "integration: requires local MySQL and Qdrant integration containers",
+]

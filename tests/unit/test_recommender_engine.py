@@ -7,11 +7,10 @@ import pandas as pd
 import pytest
 
 from recommender_engine.recommender_engine import RecommenderEngine
+from tests.fakes import FakeEmbeddingClient, FakeQdrantClient, FakeRepository
 
 
 def make_engine(sample_recipes_df, qdrant_client=None, openai_client=None) -> RecommenderEngine:
-    from tests.conftest import FakeEmbeddingClient, FakeQdrantClient, FakeRepository
-
     return RecommenderEngine(
         FakeRepository(sample_recipes_df),
         qdrant_client or FakeQdrantClient(),
@@ -56,8 +55,6 @@ def test_build_qdrant_filter_rejects_unknown_filter(sample_recipes_df: pd.DataFr
 
 
 def test_vector_search_fetches_hit_recipes_and_sorts_by_score(sample_recipes_df: pd.DataFrame) -> None:
-    from tests.conftest import FakeQdrantClient
-
     qdrant_client = FakeQdrantClient(
         points=[
             SimpleNamespace(payload={"id": 2}, score=0.95),
@@ -143,8 +140,6 @@ def test_recommend_ranks_recipes_and_updates_history(monkeypatch, sample_recipes
 
 
 def test_build_output_dataframe_returns_empty_when_repository_has_no_rows(sample_recipes_df: pd.DataFrame) -> None:
-    from tests.conftest import FakeRepository
-
     engine = make_engine(sample_recipes_df)
     engine.recipes_repository = FakeRepository(pd.DataFrame(columns=sample_recipes_df.columns))
 
@@ -154,8 +149,6 @@ def test_build_output_dataframe_returns_empty_when_repository_has_no_rows(sample
 
 
 def test_ensure_source_vector_collection_loaded_skips_when_count_matches(sample_recipes_df: pd.DataFrame) -> None:
-    from tests.conftest import FakeQdrantClient
-
     qdrant_client = FakeQdrantClient(collection_exists=True, count=len(sample_recipes_df))
     engine = make_engine(sample_recipes_df, qdrant_client=qdrant_client)
 
@@ -166,8 +159,6 @@ def test_ensure_source_vector_collection_loaded_reloads_on_count_mismatch(
     monkeypatch,
     sample_recipes_df: pd.DataFrame,
 ) -> None:
-    from tests.conftest import FakeQdrantClient
-
     qdrant_client = FakeQdrantClient(collection_exists=True, count=0)
     engine = make_engine(sample_recipes_df, qdrant_client=qdrant_client)
     monkeypatch.setattr(engine, "_load_source_collection", lambda: 2)
